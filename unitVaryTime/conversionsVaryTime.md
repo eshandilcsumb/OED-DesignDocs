@@ -23,6 +23,8 @@ This change is expected to be large and is hoped to be the core of OED V3.0.0. I
 
 Each of these steps is elaborated on in sections below.
 
+Note that manual testing is still being used. The [SQL & testing design document](../sqlTesting/sqlAndTesting.md) contains some SQL for inserting data into the DB that may be useful in testing this work including weekly patterns. It has a description of the test data and expected results for one signification test case.
+
 ## Basic DB changes & testing
 
 ### Background
@@ -324,9 +326,11 @@ The creation of cik_vary needs to be updated for patterns. The code to deal with
 
 - 5 day segments in each day.
 - For 7 days per week there are 5 x 7 = 35 segments/week.
-- In a year there are about 35 x 365 = 12.8k segments/year.
+- In a year there are about 5 x 52 = 1820 segments/year.
 - You need a slope, intercept, start date/time & end date/time for each segment entry. Say this takes 50 bytes (exact size unclear).
-- Assume the pattern spans 20 years then you have 12.8k segments/year x 20 years x 50 bytes/segment = 12.2 MB.
+- Assume the pattern spans 20 years then you have 1820 segments/year x 20 years x 50 bytes/segment = 1.8 MB or 36,400 segments.
+
+If it varied every hour then it would be 24 x 7 x 52 x 20 = 174,720 items and 8.7 MB which still is not that bad. In the first version of the code, each pattern will be limited to 36400 segments to avoid a mistake of a pattern starting/ending at infinity or having too many segments. This could change in the future.
 
 How large the total cik_vary will be is uncertain but (hopefully) most paths are not likely to have multiple time-varying patterns so the total number of cik_vary and size should be similar. If this is true then the max size is low tens of MB and that should be doable on an OED server. Given this process is not done often and the next step of calculating all the reading views takes time/memory, it is hoped patterns will not substantially change resource usage. This could change if view refreshing is better optimized. This issue will be revisited if concerns are found during implementation or in the future.
 
