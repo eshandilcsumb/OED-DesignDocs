@@ -207,10 +207,15 @@ select * from units;
 select * from week_patterns;
 select * from day_patterns;
 select * from day_segments;
-select * from conversions;
-select * from conversion_segments;
-select * from cik;
+select * from conversions order by  source_id, destination_id;
+select * from conversion_segments order by  source_id, destination_id;
+select * from cik order by source_id, destination_id;
+-- Also show name of source & destination units
+select (select name from units where id = source_id), (select name from units where id = destination_id), * from cik order by source_id, destination_id;
+select * from cik_vary order by source_id, destination_id;
 select * from cik_vary order by destination_id, start_time;
+-- Also show name of source & destination units
+select (select name from units where id = source_id), (select name from units where id = destination_id), * from cik_vary order by source_id, destination_id;
 
 -- Remove data
 delete from meters;
@@ -280,3 +285,49 @@ INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone
 - It is okay to only do w1 without w2 or just w2 if you add in unit ug3. Obviously the results will differ.
 - It was also used without any patterns by using the conversion web page to set a conversion segment to no pattern and set the slope/intercept. In this case the days & weeks are not needed but they don't cause an issue being in the DB.
 - Another variant was to remove some conversion segments from a week but this makes changes the result. The first test was only one non-pattern segment, then with a pattern, then two segments, then simple cases with chaining of conversion, etc.
+
+## Standard developer test data with time-varying
+
+If you insert the standard test data and don't have other items in the DB that you manually added then you should get this when you look at cik_vary (``select (select name from units where id = source_id), (select name from units where id = destination_id), * from cik_vary order by source_id, destination_id;
+``):
+
+| source | destination | source_id | destination_id | start_time | end_time | slope | intercept |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | 
+| Electric_Utility | BTU | 211 | 206 | -infinity | infinity | 3412.142 | 0 |
+| Electric_Utility | m³ gas | 211 | 207 | -infinity | infinity | 0.09315147659999999 | 0 |
+| Electric_Utility | kWh | 211 | 209 | -infinity | infinity | 1 | 0 |
+| Electric_Utility | US dollar | 211 | 217 | -infinity | infinity | 0.115 | 0 |
+| Electric_Utility | MJ | 211 | 222 | -infinity | infinity | 3.6 | 0 |
+| Electric_Utility | 100 w bulb | 211 | 224 | -infinity | infinity | 1 | 0 |
+| Electric_Utility | euro | 211 | 226 | -infinity | infinity | 0.1012 | 0 |
+| Electric_Utility | kg of CO₂ | 329 | 349 | -infinity | infinity | 0.709 | 0 |
+| Electric_Utility | metric ton of CO₂ | 329 | 350 | -infinity | infinity | 0.000709 | 0 |
+| Natural_Gas_M3 | BTU | 215 | 206 | -infinity | infinity | 36630.03663003663 | 0 |
+| Natural_Gas_M3 | m³ gas | 215 | 207 | -infinity | infinity | 1 | 0 |
+| Natural_Gas_M3 | kWh | 215 | 209 | -infinity | infinity | 10.73520288136796 | 0 |
+| Natural_Gas_M3 | US dollar | 215 | 217 | -infinity | infinity | 0.25 | 0 |
+| Natural_Gas_M3 | MJ | 215 | 222 | -infinity | infinity | 38.64673037292465 | 0 |
+| Natural_Gas_M3 | 100 w bulb | 215 | 224 | -infinity | infinity | 10.73520288136796 | 0 |
+| Natural_Gas_M3 | euro | 215 | 226 | -infinity | infinity | 0.22 | 0 |
+| Water_Gallon | liter | 216 | 205 | -infinity | infinity | 3.7853996378886707 | 0 |
+| Water_Gallon | gallon | 216 | 212 | -infinity | infinity | 1 | 0 |
+| Temperature_Fahrenheit | Fahrenheit | 219 | 208 | -infinity | infinity | 1 | 0 |
+| Temperature_Fahrenheit | Celsius | 219 | 214 | -infinity | infinity | 0.5555555555555556 | -17.77777777777778 |
+| Electric_kW | kW | 221 | 220 | -infinity | infinity | 1 | 0 |
+| Natural_Gas_BTU | BTU | 223 | 206 | -infinity | infinity | 1 | 0 |
+| Natural_Gas_BTU | m³ gas | 223 | 207 | -infinity | infinity | 2.73e-05 | 0 |
+| Natural_Gas_BTU | kWh | 223 | 209 | -infinity | infinity | 0.0002930710386613453 | 0 |
+| Natural_Gas_BTU | US dollar | 223 | 217 | -infinity | infinity | 2.954545454545455e-06 | 0 |
+| Natural_Gas_BTU | MJ | 223 | 222 | -infinity | infinity | 0.0010550557391808431 | 0 |
+| Natural_Gas_BTU | 100 w bulb | 223 | 224 | -infinity | infinity | 0.0002930710386613453 | 0 |
+| Natural_Gas_BTU | euro | 223 | 226 | -infinity | infinity | 2.6e-06 | 0 |
+| Natural_Gas_BTU | kg of CO₂ | 339 | 349 | -infinity | infinity | 5.29e-05 | 0 |
+| Natural_Gas_BTU | metric ton of CO₂ | 339 | 350 | -infinity | infinity | 5.29e-08 | 0
+| Natural_Gas_Dollar | US dollar | 225 | 217 | -infinity | infinity | 1 | 0 |
+| Natural_Gas_Dollar | euro | 225 | 226 | -infinity | infinity | 0.88 | 0 |
+| Trash | kg | 229 | 210 | -infinity | infinity | 1 | 0 |
+| Trash | metric ton | 229 | 213 | -infinity | infinity | 0.001 | 0 |
+| Trash | kg of CO₂ | 345 | 349 | -infinity | infinity | 3.24e-06 | 0 |
+| Trash | metric ton of CO₂ | 345 | 350 | -infinity | infinity | 3.24e-09 | 0 |
+| Water_Gallon_Per_Minute | gallon per minute | 230 | 227 | -infinity | infinity | 1 | 0 |
+| Water_Gallon_Per_Minute | liter per hour | 230 | 228 | -infinity | infinity | 227.12398 | 0 |
