@@ -286,6 +286,185 @@ INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone
 - It was also used without any patterns by using the conversion web page to set a conversion segment to no pattern and set the slope/intercept. In this case the days & weeks are not needed but they don't cause an issue being in the DB.
 - Another variant was to remove some conversion segments from a week but this makes changes the result. The first test was only one non-pattern segment, then with a pattern, then two segments, then simple cases with chaining of conversion, etc.
 
+## Direct Time-vary into cik
+
+- This was for short-term testing of newer time-vary work where patterns not there so manually inserting into conversions/cik/cik_vary so can see results.
+
+These have "a" at the front of names so they show up early in the OED menus.
+
+**If you update cik_vary (and maybe cik) then the values inserted will be lost and you will not see what is desired.**
+
+Note that flow are the same where you simpley replace quantity -> flow everywhere.
+
+### Units
+
+- Quantity
+  - aumReadingsQuantity1: meter unit used for the test readings
+  - aumExpectQuantity1: meter unit for holding the expected values
+  - augQuantityTest1: the graphic unit to test TV conversions
+
+### Conversions
+
+These may not be strictly needed but nice to have. They should match the cik/cik_vary conversions to have them align.
+
+- Quantity
+  - aumReadingsQuantity1 -> augQuantityTest1: holds the conversion for graphing the test readings in the graphic unit. This will be time_varying.
+  - aumExpectQuantity1 -> augQuantityTest1: holds the conversion for graphing the expected values in a graphic unit. This is a simple unit conversion across all time.
+
+### Meters
+
+- Quantity
+  - aReadingsQuantity 1: meter used for the test readings
+  - aExpectHourlyQuantity 1: meter used for holding the expected Hourly values
+  - aExpectDailyQuantity 1: meter used for holding the expected Daily values
+
+### SQL including seeing results
+
+```sql
+-- see data: see above/other examples for doing this.
+select * from readings where meter_id = ( select id from meters where name = 'aReadingsQuantity 1' );
+select * from readings where meter_id = ( select id from meters where name = 'aExpectHourlyQuantity 1' );
+select * from readings where meter_id = ( select id from meters where name = 'aExpectDailyQuantity 1' );
+
+select * from meter_daily_readings_unit where meter_id = ( select id from meters where name = 'aReadingsQuantity 1' );
+select * from meter_hourly_readings_unit where meter_id = ( select id from meters where name = 'aExpectHourlyQuantity 1' );
+select * from meter_hourly_readings_unit where meter_id = ( select id from meters where name = 'aExpectDailyQuantity 1' );
+
+select * from meter_daily_readings_unit_cagg where meter_id = ( select id from meters where name = 'aReadingsQuantity 1' );
+select * from meter_hourly_readings_unit_cagg where meter_id = ( select id from meters where name = 'aExpectHourlyQuantity 1' ) order by bucket;
+select * from meter_hourly_readings_unit_cagg where meter_id = ( select id from meters where name = 'aExpectDailyQuantity 1' ) order by bucket;
+
+-- Remove data
+delete from readings where meter_id in ( select id from meters where name like 'aReadings%' or name like 'aExpect%' and default_graphic_unit in ( select id from units where name like 'aug%' ) );
+delete from meters where name like 'aReadings%' or name like 'aExpect%' and default_graphic_unit in ( select id from units where name like 'aug%' );
+delete from conversions where source_id in ( select id from units where name like 'aum%' ) and  destination_id in ( select id from units where name like 'aug%' );
+delete from cik where source_id in ( select id from units where name like 'aum%' ) and  destination_id in ( select id from units where name like 'aug%' );
+delete from cik_vary where source_id in ( select id from units where name like 'aum%' ) and  destination_id in ( select id from units where name like 'aug%' );
+delete from units where name like 'aug%' or name like 'aum%';
+
+-- Insert test data
+-- units
+-- Quantity
+INSERT INTO units(name, identifier, unit_represent, sec_in_rate, type_of_unit, suffix, displayable, preferred_display, note, min_val, max_val, disable_checks) VALUES ('aumReadingsQuantity1', 'aumReadingsQuantity1', 'quantity', 3600, 'meter', '', 'none', false, '', -999999999, 999999999, 'reject_all');
+INSERT INTO units(name, identifier, unit_represent, sec_in_rate, type_of_unit, suffix, displayable, preferred_display, note, min_val, max_val, disable_checks) VALUES ('aumExpectQuantity1', 'aumExpectQuantity1', 'quantity', 3600, 'meter', '', 'none', false, '', -999999999, 999999999, 'reject_all');
+INSERT INTO units(name, identifier, unit_represent, sec_in_rate, type_of_unit, suffix, displayable, preferred_display, note, min_val, max_val, disable_checks) VALUES ('augQuantityTest1', 'augQuantityTest1', 'quantity', 3600, 'unit', '', 'all', false, '', -999999999, 999999999, 'reject_all');
+-- Flow
+INSERT INTO units(name, identifier, unit_represent, sec_in_rate, type_of_unit, suffix, displayable, preferred_display, note, min_val, max_val, disable_checks) VALUES ('aumReadingsFlow1', 'aumReadingsFlow1', 'flow', 3600, 'meter', '', 'none', false, '', -999999999, 999999999, 'reject_all');
+INSERT INTO units(name, identifier, unit_represent, sec_in_rate, type_of_unit, suffix, displayable, preferred_display, note, min_val, max_val, disable_checks) VALUES ('aumExpectFlow1', 'aumExpectFlow1', 'flow', 3600, 'meter', '', 'none', false, '', -999999999, 999999999, 'reject_all');
+INSERT INTO units(name, identifier, unit_represent, sec_in_rate, type_of_unit, suffix, displayable, preferred_display, note, min_val, max_val, disable_checks) VALUES ('augFlowTest1', 'augFlowTest1', 'flow', 3600, 'unit', '', 'all', false, '', -999999999, 999999999, 'reject_all');
+
+-- conversions: not formally needed but adding so can see in UI since easy & does not normally change with different tests.
+-- Quantity
+INSERT INTO CONVERSIONS VALUES ( ( SELECT id FROM units WHERE NAME = 'aumReadingsQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ), false, '' );
+INSERT INTO CONVERSIONS VALUES ( ( SELECT id FROM units WHERE NAME = 'aumExpectQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ), false, '' );
+-- Flow
+INSERT INTO CONVERSIONS VALUES ( ( SELECT id FROM units WHERE NAME = 'aumReadingsFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ), false, '' );
+INSERT INTO CONVERSIONS VALUES ( ( SELECT id FROM units WHERE NAME = 'aumExpectFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ), false, '' );
+
+-- conversion segments: not formally needed since ci_vary is set so not doing
+
+-- cik
+-- Quantity
+INSERT INTO cik VALUES ( ( SELECT id FROM units WHERE NAME = 'aumReadingsQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ) );
+INSERT INTO cik VALUES ( ( SELECT id FROM units WHERE NAME = 'aumExpectQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ) );
+-- Flow
+INSERT INTO cik VALUES ( ( SELECT id FROM units WHERE NAME = 'aumReadingsFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ) );
+INSERT INTO cik VALUES ( ( SELECT id FROM units WHERE NAME = 'aumExpectFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ) );
+
+-- cik_vary
+-- For the test readings to graph
+-- Quantity
+-- Should be before data so use weird slope
+insert into cik_vary values( ( select id from units where name = 'aumReadingsQuantity1' ),  ( select id from units where name = 'augQuantityTest1' ), '-infinity', '2022-08-18 00:00:00', -99, 0);
+-- time-varying for segments desired
+insert into cik_vary values( ( select id from units where name = 'aumReadingsQuantity1' ),  ( select id from units where name = 'augQuantityTest1' ), '2022-08-18 00:00:00', '2022-08-20 00:00:00', 1, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsQuantity1' ),  ( select id from units where name = 'augQuantityTest1' ), '2022-08-20 00:00:00', '2022-09-01 00:00:00', 2, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsQuantity1' ),  ( select id from units where name = 'augQuantityTest1' ), '2022-09-01 00:00:00', '2022-09-01 09:00:00', 3, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsQuantity1' ),  ( select id from units where name = 'augQuantityTest1' ), '2022-09-01 09:00:00', '2022-09-15 00:00:00', 4, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsQuantity1' ),  ( select id from units where name = 'augQuantityTest1' ), '2022-09-15 00:00:00', '2022-10-01 00:00:00', 5, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsQuantity1' ),  ( select id from units where name = 'augQuantityTest1' ), '2022-10-01 00:00:00', '2022-10-15 00:00:00', 6, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsQuantity1' ),  ( select id from units where name = 'augQuantityTest1' ), '2022-10-15 00:00:00', '2022-11-01 00:00:00', 7, 0);
+-- Should be after data so use weird slope
+insert into cik_vary values( ( select id from units where name = 'aumReadingsQuantity1' ), ( select id from units where name = 'augQuantityTest1' ), '2022-11-01 00:00:00', 'infinity', -999, 0);
+-- For the expected to graph. The is a unit conversion since it is already the desired value.
+insert into cik_vary values( ( select id from units where name = 'aumExpectQuantity1' ), ( select id from units where name = 'augQuantityTest1' ), '-infinity', 'infinity', 1, 0);
+-- Flow
+-- Should be before data so use weird slope
+insert into cik_vary values( ( select id from units where name = 'aumReadingsFlow1' ),  ( select id from units where name = 'augFlowTest1' ), '-infinity', '2022-08-18 00:00:00', -99, 0);
+-- time-varying for segments desired
+insert into cik_vary values( ( select id from units where name = 'aumReadingsFlow1' ),  ( select id from units where name = 'augFlowTest1' ), '2022-08-18 00:00:00', '2022-08-20 00:00:00', 1, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsFlow1' ),  ( select id from units where name = 'augFlowTest1' ), '2022-08-20 00:00:00', '2022-09-01 00:00:00', 2, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsFlow1' ),  ( select id from units where name = 'augFlowTest1' ), '2022-09-01 00:00:00', '2022-09-01 09:00:00', 3, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsFlow1' ),  ( select id from units where name = 'augFlowTest1' ), '2022-09-01 09:00:00', '2022-09-15 00:00:00', 4, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsFlow1' ),  ( select id from units where name = 'augFlowTest1' ), '2022-09-15 00:00:00', '2022-10-01 00:00:00', 5, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsFlow1' ),  ( select id from units where name = 'augFlowTest1' ), '2022-10-01 00:00:00', '2022-10-15 00:00:00', 6, 0);
+insert into cik_vary values( ( select id from units where name = 'aumReadingsFlow1' ),  ( select id from units where name = 'augFlowTest1' ), '2022-10-15 00:00:00', '2022-11-01 00:00:00', 7, 0);
+-- Should be after data so use weird slope
+insert into cik_vary values( ( select id from units where name = 'aumReadingsFlow1' ), ( select id from units where name = 'augFlowTest1' ), '2022-11-01 00:00:00', 'infinity', -999, 0);
+-- For the expected to graph. The is a unit conversion since it is already the desired value.
+insert into cik_vary values( ( select id from units where name = 'aumExpectFlow1' ), ( select id from units where name = 'augFlowTest1' ), '-infinity', 'infinity', 1, 0);
+
+-- Meters: only need to do once
+-- Quantity
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aReadingsQuantity 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aReadingsQuantity 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumReadingsQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectHourlyQuantity 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectHourlyQuantity 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectHourlyQuantityMin 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectHourlyQuantityMin 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectHourlyQuantityMax 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectHourlyQuantityMax 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectDailyQuantity 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectDailyQuantity 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectDailyQuantityMin 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectDailyQuantityMin 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectDailyQuantityMax 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectDailyQuantityMax 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectQuantity1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augQuantityTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+-- Flow
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aReadingsFlow 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aReadingsFlow 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumReadingsFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectHourlyFlow 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectHourlyFlow 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectHourlyFlowMin 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectHourlyFlowMin 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectHourlyFlowMax 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectHourlyFlowMax 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectDailyFlow 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectDailyFlow 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectDailyFlowMin 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectDailyFlowMin 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+INSERT INTO meters(name, url, enabled, displayable, meter_type, default_timezone_meter, gps, identifier, note, area, cumulative, cumulative_reset, cumulative_reset_start, cumulative_reset_end, reading_gap, reading_variation, reading_duplication, time_sort, end_only_time, reading, start_timestamp, end_timestamp, previous_end, unit_id, default_graphic_unit, area_unit, reading_frequency, min_val, max_val, min_date, max_date, max_error, disable_checks) VALUES ('aExpectDailyFlowMax 1', null, false, true, 'other', DEFAULT, DEFAULT, 'aExpectDailyFlowMax 1', DEFAULT, DEFAULT, false, false, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ( SELECT ID FROM UNITS WHERE NAME = 'aumExpectFlow1' ), ( SELECT ID FROM UNITS WHERE NAME = 'augFlowTest1' ), DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+```
+
+The above segments match what was put into the spreadsheet "expect TV.ods". Then do:
+
+- Run above SQL to create DB items.
+- create CVS files to test the data. They come from "expect TV.ods".
+  - readingsTest1.csv: The values from the Input section for min or reading or max, start time, end time were placed into a CSV (in that order for first three columns) for the readings CSV.
+  - For Hourly (60 min/reading), the readings are in K11:K1810. For Daily (1440 min/reading), the readings are in K11:K85. These are put in column A of the CSV. The start/end times are the same ranges but in columns M,N, i.e., M11:N1810 for hourly. The min/max values are also in the same range but column J/L.
+  - Make sure For graphing? is true in spreadsheet.
+    - Create as many of these expected files as you want. Note you must set graphing to true in the spreadsheet to get the same values.
+      - readingsTest1.csv: has the 75 days of 15 minute readings for all tests. It will be loaded into multiple meters.
+      - expectedDailyQuantityTest1.csv: for daily data of a quantity.
+      - expectedDailyQuantityMinTest1.csv: for daily data of a quantity.
+      - ... Also Hourly instead of Daily, Max instead of Min, Flow for Quantity.
+  - For flow, change Quantity data? in spreadsheet to false but the rest is the same where change naming to flow.
+- Then these curl commands were run in a standard terminal (not the OED Docker container) where it is in the directory with the CSV files just created to upload the readings:
+  - Only need one Result meter since can change the range to see either Hourly or Daily. An alternative is to change the meter frequency so it thinks there are fewer points so returns hourly not daily for longer ranges of time.
+    - Quantity
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aReadingsQuantity 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@readingsTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectHourlyQuantity 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectHourlyQuantityTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectHourlyQuantityMin 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectHourlyQuantityMinTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectHourlyQuantityMax 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectHourlyQuantityMaxTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectDailyQuantity 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectDailyQuantityTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectDailyQuantityMin 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectDailyQuantityMinTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectDailyQuantityMax 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectDailyQuantityMaxTest1.csv'
+    - Flow
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aReadingsFlow 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@readingsTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectHourlyFlow 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectHourlyFlowTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectHourlyFlowMin 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectHourlyFlowMinTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectHourlyFlowMax 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectHourlyFlowMaxTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectDailyFlow 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectDailyFlowTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectDailyFlowMin 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectDailyFlowMinTest1.csv'
+curl http://localhost:3000/api/csv/readings -X POST -F 'meterName=aExpectDailyFlowMax 1' -F 'gzip=no' -F 'email=test' -F 'password=password' -F 'csvfile=@expectDailyFlowMaxTest1.csv'
+- If things go well then graphing those two meters with the augQuantityTest1 unit will be the same.
+
+#### PSQL triggers (these for new Hypertable ones)
+
+```sql
+-- disable trigger: can see if PGAdmin if look at properties of the trigger.
+ALTER TABLE readings DISABLE TRIGGER trg_readings_update_hourly_hypertable;
+-- enable trigger
+ALTER TABLE readings ENABLE TRIGGER trg_readings_update_hourly_hypertable;
+```
+
 ## Standard developer test data with time-varying
 
 If you insert the standard test data and don't have other items in the DB that you manually added then you should get this when you look at cik_vary (``select (select name from units where id = source_id), (select name from units where id = destination_id), * from cik_vary order by source_id, destination_id;
