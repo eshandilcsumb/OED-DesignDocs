@@ -453,6 +453,63 @@ These need to be worked out. The current reading tests will be a good start.
 
 ### Exceptions for conversion patterns
 
+#### 260724 Update
+
+Work has continued this summer. A team has been implementing a UI for holidays and integrated it with the backend done earlier for holidays. This includes working with an external server to get holidays for any region in the world. That team should be posting updates about that work in the near future.
+
+#### Applying holiday exceptions to RRule
+
+Once holidays are stored in OED, they need to override the normal pattern to use the desired conversion instead. This outlines the current thinking (as of 260724) on how this will be done.
+
+Here is some overview information on doing this:
+
+- day segments are associated with a day. days are associated with a week to get the pattern. The week pattern is used to create the RRule. PR 1565 has the code for doing the RRule aspect and is generally working.
+- During the work, it was decided that any conversion segment (and thus conversion too) must start and end at the start of a day. Thus, all conversions are a multiple of a day. This was needed to readily support RRule but also aligns with the fact that holidays are for a given, full day. Holidays that are thought of as more than one day are treated as separate days and that is how the external holiday service reports them. It is also assumed that holidays do not overlap as is the case for conversion segments.
+  - Overlapping holidays (same day) would lead to ambiguity in what conversion is desired for that day. This might cause the code to have issues and at best it would use either one of the overlapping day conversion values. It might be good for OED to check for this. Since the day of a holiday can vary, it probably isn't exact to compare holidays until they are applied to a specific conversion segment which implies knowing the specific day in the given year. This has not been thought through but may not be too hard to do. Something that needs to be done but probably after the initial system is working.
+- A specific holiday is applied to OED by associating a day with it to define the desired conversions across that day of the holiday. A specific holiday group is created by associating the desired specific holidays. This contains the exceptions and the desired conversion. The specific holiday group is associated with a weekly pattern. The means a weekly pattern knows any exceptions that apply. If no specific holiday group is applied then there are not exceptions. Since a pattern is applied to a conversion segment, a conversion segment will know the repeating pattern and any exceptions.
+- The conceptual idea (details are below) is that when an RRule is created for a given conversion segment, the external holiday server is used to find all the actual dates for holiday exceptions that lie within the conversion segment's time span. Each holiday is a full day so that day is excluded from the RRule. When the RRule is used to generate the segments for cik_vary, there will be gaps for the excluded days for holidays. The list of actual holiday dates are used to fill in those gaps. Since a holiday instance has a day instance associated with it, the day can be used to get the conversions across the desired day. Each one is added in the same way that the RRule added segments from the pattern. When complete, there will be no gaps and the process can continue in the same way it did before holiday exceptions.
+
+Here are some details on making this work within the OED code that exists for applying RRules:
+
+- RRules are created for a pattern for a given conversion segment in src/server/services/graph/timeVaryingPathConversion.js by the call ``const ruleInfo = await generateRrule(weekId, curSegment.startTime, curSegment.endTime, conn);``. Right after this, the holiday exceptions for this conversion segment will be determined by the following ideas and added to the RRule:
+
+```js
+// Loop over all the holidays in the holiday group associated with the pattern for this conversion segment.
+    // Get all instances of the current holiday that lie within the conversion segment's start/end time. If a holiday is repeated every year then there will be one instance for all the full years of the conversion segment. The partial years will only have an instance of this holiday if it is the same or after/before the start/end day of the start/end time for the conversion segment. The external server will be used where it can return the specific date when provided with a specific year. For now, this will be done each time this is done even though the result will be the same except for new ones. This makes the software simpler and it is not anticipated it will be done a lot.
+    // The included instances of holidays will be store and are called holidayInstances here.
+
+// Loop over holidayInstances
+    // Each holiday instance is for a specific day. Use the day to determine its day of the week (moment should be able to do this). Find all RRules that are for that day of the week and add this date as an exception. Note that a given RRule can be for multiple days and there can be multiple RRules for a given day of the week. This should not be too hard but care should be used.
+```
+
+The developer needs to look into how to put exception dates on an RRule.  You can add an excluded date to an RRuleSet using the exdate function. This document talks about RRule (and the code uses that) so some extra work may be needed. This [StackOverflow post](https://stackoverflow.com/questions/62533315/how-to-exclude-date-in-rrule-js) may be a start at what is needed but other ways that work are also fine.
+
+After all the values have been added to ``edgeSegments[i]`` for the RRules then the holiday exceptions are added with their conversion information. This will happen after the loop (``occurrences.forEach((patternOccurrences) => {``) but before the sorting of these edgeSegments (``edgeSegments[i] = sortBy(edgeSegments[i], 'startTime');``) in the same timeVaryingPathConversion.js file but below where the code above was added. This is critical since each index in the edgeSegments must be in time sorted order for all added items in a given index of the array for the next set of steps. Here are the steps:
+
+```js
+// Loop over the holidayInstances created above (same general idea as looping over the patternOccurrences).
+    // For a given holiday instance, use its associated day to loop over all day segments that are logically associated with this holiday instance.
+        // Add a new conversion segment into ``edgeSegments[i]`` that holds the date/time start/end for that specific day and the associated conversion values. This is similar to how ``newSegment`` is created for the pattern in the loop right above where this code is being added but some values will come from other places. It is also important that the conversion from the day segment is reversed if the conversion that holds this conversion segment indicates it must be reversed. The logic used for the RRule conversions to reverse the conversion is:
+
+            // II.b. If reversed is true then invert the slope/intercept for each conversion using invertConversion().
+            if (reversed) {
+                // Reversed so invert segment found.
+                const { convertedSlope, convertedIntercept } = invertConversion(ruleInfo.slope, ruleInfo.intercept)
+                ruleInfo = {
+                    ...ruleInfo,
+                    slope: convertedSlope,
+                    intercept: convertedIntercept
+                };
+            }
+
+        // The logic is similar but the location of the conversion information and where it is put will be different.
+
+```
+
+The rest of the code should not need changes and include the new, sorted items in edgeSegments (sorted within each index in the array). Once sorted, the exceptions will appear in the same place as they did for the pattern but the conversion values and the hours of the day that it applies can be different than the pattern. Since edgeSegments now has the holiday exception items, they will be included in cik_vary in the correct way. It is unknown how long the additional work will take, esp. since it requires communicating with the external holiday service. The number of items in edgeSegments should be similar since the pattern day is being replaced with the holiday values. Thus, it is believed this will still run fairly quickly. Given it is only done when certain actions are taken by the admin (changing a conversion, adding a new meter type that is linked to a pattern, ...) and they are not believed to be regularly done, this should be fine but final testing will validate this assumption.
+
+### End update
+
 This [document](./Front-End%20Documentation%20Instruction.md) is from a spring 2026 team that started to implement the holiday system.
 
 Assuming the plan to use ical RRULE to create patterned conversions is used, the exceptions for holidays could be added via EXDATE. The question is how to do that. This has not been completely worked out. However, basic research found that there is free software to determine holiday dates for locations around the world. These are specified here as a starting point for future efforts.
