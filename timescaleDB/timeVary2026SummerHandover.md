@@ -1,16 +1,16 @@
 # Technical Handover Document
 
-# TimescaleDB Migration for Meter Reading Aggregation
+## TimescaleDB Migration for Meter Reading Aggregation
 
 ---
 
-# Executive Summary
+### Executive Summary
 
 This document provides a technical handover for the TimescaleDB migration completed as part of the meter reading aggregation optimization project.
 
 The objective of the project was to replace the existing PostgreSQL materialized-view-based reporting architecture with a TimescaleDB implementation using hypertables and continuous aggregates.
 
-The migration was driven by the increasing cost of refreshing PostgreSQL materialized views as historical meter data continued to grow. The previous implementation recalculated large portions of historical data during every refresh, resulting in long execution times and duplicated work across hourly and daily aggregations.
+The migration was driven by the increasing cost of refreshing PostgreSQL materialized views as historical meter data continued to grow. The previous implementation recalculated all of historical data during every refresh, resulting in long execution times and some unnecessary joins repeated across hourly and daily aggregations.
 
 The new implementation introduces:
 
@@ -20,7 +20,167 @@ The new implementation introduces:
 - Updated application initialization and refresh workflows.
 - Benchmarking and validation tools to verify correctness against the legacy implementation.
 
-The migration successfully preserves analytical correctness while reducing aggregate refresh times by more than two orders of magnitude. Extensive benchmarking demonstrated approximately 250× faster hourly refreshes and approximately 340× faster daily refreshes compared to the previous implementation.
+The migration successfully preserves analytical correctness while reducing aggregate refresh times by more than two orders of magnitude, even when the amount of historical data is modest. Extensive benchmarking demonstrated approximately 250× faster hourly refreshes and approximately 340× faster daily refreshes compared to the previous implementation.
+
+### Benchmark 
+
+#### Configuration
+
+|        config_key        |             config_value              |                            description
+|--------------------------|---------------------------------------|--------------------------------------------------------------------
+| baseline_end_date        | 2021-12-31 23:59:59                   | End of baseline dataset
+| baseline_start_date      | 2020-01-01 00:00:00                   | Beginning of baseline dataset
+| benchmark_meter_id       | 32                                    | Meter ID used for benchmark execution
+| daily_cagg               | meter_daily_readings_unit_cagg        | TimescaleDB daily continuous aggregate
+| daily_materialized_view  | meter_daily_readings_unit             | Legacy PostgreSQL daily materialized view
+| generate_random_seed     | false                                 | Deprecated: benchmark readings are deterministic for repeatability
+| hourly_cagg              | meter_hourly_readings_unit_cagg       | TimescaleDB hourly continuous aggregate
+| hourly_materialized_view | meter_hourly_readings_unit            | Legacy PostgreSQL hourly materialized view
+| hourly_split_table       | hypertable_hourly_split               | TimescaleDB hourly split hypertable
+| hourly_split_trigger     | trg_readings_update_hourly_hypertable | Trigger responsible for hourly split generation
+| refresh_concurrent       | false                                 | Use concurrent materialized view refresh if supported
+| run_query_tests          | true                                  | Enable query performance testing
+| run_storage_tests        | true                                  | Enable storage measurements
+| source_table             | readings                              | Source readings table
+
+#### Baseline
+
+|           object_name           |      object_type       | row_count |    min_timestamp    |    max_timestamp
+|---------------------------------|------------------------|-----------|---------------------|---------------------
+| readings                        | SOURCE_TABLE           |     70176 | 2020-01-01 00:00:00 | 2022-01-01 00:00:00
+| hypertable_hourly_split         | TIMESCALE_HOURLY_SPLIT |    631584 | 2020-01-01 00:00:00 | 2022-01-01 00:00:00
+| meter_hourly_readings_unit_cagg | TIMESCALE_HOURLY_CAGG  |    157896 |                     |
+| meter_daily_readings_unit_cagg  | TIMESCALE_DAILY_CAGG   |      6579 |                     |
+
+ Since group is calculated from meter hourly and daily, they are in milliseconds and comparing with legacy views seemed unnecessary.
+
+#### Parameters
+
+|        config_key        |             config_value
+|--------------------------|---------------------------------------
+| baseline_end_date        | 2021-12-31 23:59:59
+| baseline_start_date      | 2020-01-01 00:00:00
+| benchmark_meter_id       | 32
+| daily_cagg               | meter_daily_readings_unit_cagg
+| daily_materialized_view  | meter_daily_readings_unit
+| generate_random_seed     | false
+| hourly_cagg              | meter_hourly_readings_unit_cagg
+| hourly_materialized_view | meter_hourly_readings_unit
+| hourly_split_table       | hypertable_hourly_split
+| hourly_split_trigger     | trg_readings_update_hourly_hypertable
+| refresh_concurrent       | false
+| run_query_tests          | true
+| run_storage_tests        | true
+| source_table             | readings
+
+#### Test Data
+
+|   location_code    |        situation_description         | size_code |       scenario_name        |     start_time      |      end_time
+|--------------------|--------------------------------------|-----------|----------------------------|---------------------|---------------------
+| AFTER_LAST_DATE    | Append data after existing history   |   DAY     | AFTER_LAST_DATE_DAY      | 2022-01-01 00:00:00 | 2022-01-02 00:00:00
+| AFTER_LAST_DATE    | Append data after existing history   |   MONTH   | AFTER_LAST_DATE_MONTH    | 2022-01-01 00:00:00 | 2022-02-01 00:00:00
+| AFTER_LAST_DATE    | Append data after existing history   |   WEEK    | AFTER_LAST_DATE_WEEK     | 2022-01-01 00:00:00 | 2022-01-08 00:00:00
+| AFTER_LAST_DATE    | Append data after existing history   |   YEAR    | AFTER_LAST_DATE_YEAR     | 2022-01-01 00:00:00 | 2023-01-01 00:00:00
+| BEFORE_FIRST_DATE  | Insert data before existing history  |   DAY     | BEFORE_FIRST_DATE_DAY    | 2019-01-01 00:00:00 | 2019-01-02 00:00:00
+| BEFORE_FIRST_DATE  | Insert data before existing history  |   MONTH   | BEFORE_FIRST_DATE_MONTH  | 2019-01-01 00:00:00 | 2019-02-01 00:00:00
+| BEFORE_FIRST_DATE  | Insert data before existing history  |   WEEK    | BEFORE_FIRST_DATE_WEEK   | 2019-01-01 00:00:00 | 2019-01-08 00:00:00
+| BEFORE_FIRST_DATE  | Insert data before existing history  |   YEAR    | BEFORE_FIRST_DATE_YEAR   | 2019-01-01 00:00:00 | 2020-01-01 00:00:00
+| MIDDLE_REPLACEMENT | Replace data inside existing history |   MONTH   | MIDDLE_REPLACEMENT_  MONTH | 2020-06-01 00:00:00 | 2020-07-01 00:00:00
+
+|       scenario_name        |     situation      | date_range | source_rows
+|----------------------------|--------------------|------------|-------------
+| AFTER_LAST_DATE_ DAY       | AFTER_LAST_DATE    |   DAY      |          24
+| AFTER_LAST_DATE_MONTH      | AFTER_LAST_DATE    |   MONTH    |         744
+| AFTER_LAST_DATE_WEEK       | AFTER_LAST_DATE    |   WEEK     |         168
+| AFTER_LAST_DATE_YEAR       | AFTER_LAST_DATE    |   YEAR     |        8760
+| BEFORE_FIRST_DATE_DAY      | BEFORE_FIRST_DATE  |   DAY      |          24
+| BEFORE_FIRST_DATE_MONTH    | BEFORE_FIRST_DATE  |   MONTH    |         744
+| BEFORE_FIRST_DATE_WEEK     | BEFORE_FIRST_DATE  |   WEEK     |         168
+| BEFORE_FIRST_DATE_YEAR     | BEFORE_FIRST_DATE  |   YEAR     |        8760
+| MIDDLE_REPLACEMENT_MONTH   | MIDDLE_REPLACEMENT |   MONTH    |         720
+
+#### Insert
+
+|       scenario_name       |     situation     | date_range | implementation | source_rows | hourly_split_rows | duration_ms | rows_per_second
+|---------------------------|-------------------|------------|----------------|-------------|-------------------|-------------|-----------------
+| AFTER_LAST_DATE_DAY       | AFTER_LAST_DATE   |   DAY      | LEGACY         |          24 |                 0 |       2.587 |        9277.155
+| AFTER_LAST_DATE_DAY       | AFTER_LAST_DATE   |   DAY      | TIMESCALE      |          24 |               216 |      31.047 |         773.022
+| AFTER_LAST_DATE_WEEK      | AFTER_LAST_DATE   |   WEEK     | LEGACY         |         168 |                 0 |       6.562 |       25601.951
+| AFTER_LAST_DATE_WEEK      | AFTER_LAST_DATE   |   WEEK     | TIMESCALE      |         168 |              1512 |      69.547 |        2415.633
+| AFTER_LAST_DATE_MONTH     | AFTER_LAST_DATE   |   MONTH    | LEGACY         |         744 |                 0 |      24.533 |       30326.499
+| AFTER_LAST_DATE_MONTH     | AFTER_LAST_DATE   |   MONTH    | TIMESCALE      |         744 |              6696 |     298.165 |        2495.263
+| AFTER_LAST_DATE_YEAR      | AFTER_LAST_DATE   |   YEAR     | LEGACY         |        8760 |                 0 |     303.218 |       28890.105
+| AFTER_LAST_DATE_YEAR      | AFTER_LAST_DATE   |   YEAR     | TIMESCALE      |        8760 |             78840 |    3671.501 |        2385.945
+| BEFORE_FIRST_DATE_DAY     | BEFORE_FIRST_DATE |   DAY      | LEGACY         |          24 |                 0 |       2.294 |       10462.075
+| BEFORE_FIRST_DATE_DAY     | BEFORE_FIRST_DATE |   DAY      | TIMESCALE      |          24 |               216 |      14.191 |        1691.213
+| BEFORE_FIRST_DATE_WEEK    | BEFORE_FIRST_DATE |   WEEK     | LEGACY         |         168 |                 0 |       6.791 |       24738.625
+| BEFORE_FIRST_DATE_WEEK    | BEFORE_FIRST_DATE |   WEEK     | TIMESCALE      |         168 |              1512 |      65.123 |        2579.734
+| BEFORE_FIRST_DATE_MONTH   | BEFORE_FIRST_DATE |   MONTH    | LEGACY         |         744 |                 0 |      23.744 |       31334.232
+| BEFORE_FIRST_DATE_MONTH   | BEFORE_FIRST_DATE |   MONTH    | TIMESCALE      |         744 |              6696 |     306.256 |        2429.340
+| BEFORE_FIRST_DATE_YEAR    | BEFORE_FIRST_DATE |   YEAR     | LEGACY         |        8760 |                 0 |     288.164 |       30399.356
+| BEFORE_FIRST_DATE_YEAR    | BEFORE_FIRST_DATE |   YEAR     | TIMESCALE      |        8760 |             78840 |    3787.205 |        2313.051
+
+![After Last Date Chart](./Images/after_insert_meter_duration.png) ![Before First Date Chart](./Images/before_insert_meter_duration.png)
+
+The numbers before the labels on the graph has no value other than to align the graph better. The alignment would not be correct without the numbers prefixed. Example the spelling of Week is starts with "W" and the spelling of Month starts with "M", if ordered by letters, month will be displayed before week, therefore, the numbers appear before the duration.
+
+#### Refresh:
+
+|       scenario_name       |     situation     | date_range | aggregation_level | implementation | rows_affected | duration_ms | rows_per_second
+|---------------------------|-------------------|------------|-------------------|----------------|---------------|-------------|-----------------
+| AFTER_LAST_DATE_DAY       | AFTER_LAST_DATE   |   DAY      | DAILY             | LEGACY         |             9 |    5094.777 |           1.767
+| AFTER_LAST_DATE_DAY       | AFTER_LAST_DATE   |   DAY      | DAILY             | TIMESCALE      |             9 |      15.242 |         590.474
+| AFTER_LAST_DATE_WEEK      | AFTER_LAST_DATE   |   WEEK     | DAILY             | LEGACY         |            63 |    4686.750 |          13.442
+| AFTER_LAST_DATE_WEEK      | AFTER_LAST_DATE   |   WEEK     | DAILY             | TIMESCALE      |            63 |      11.969 |        5263.598
+| AFTER_LAST_DATE_MONTH     | AFTER_LAST_DATE   |   MONTH    | DAILY             | LEGACY         |           279 |    4940.009 |          56.478
+| AFTER_LAST_DATE_MONTH     | AFTER_LAST_DATE   |   MONTH    | DAILY             | TIMESCALE      |           279 |      22.093 |       12628.434
+| AFTER_LAST_DATE_YEAR      | AFTER_LAST_DATE   |   YEAR     | DAILY             | LEGACY         |          3285 |    5158.685 |         636.790
+| AFTER_LAST_DATE_YEAR      | AFTER_LAST_DATE   |   YEAR     | DAILY             | TIMESCALE      |          3285 |      88.837 |       36977.836
+| BEFORE_FIRST_DATE_DAY     | BEFORE_FIRST_DATE |   DAY      | DAILY             | LEGACY         |             9 |    4699.987 |           1.915
+| BEFORE_FIRST_DATE_DAY     | BEFORE_FIRST_DATE |   DAY      | DAILY             | TIMESCALE      |             9 |      38.082 |         236.332
+| BEFORE_FIRST_DATE_WEEK    | BEFORE_FIRST_DATE |   WEEK     | DAILY             | LEGACY         |            63 |    4746.455 |          13.273
+| BEFORE_FIRST_DATE_WEEK    | BEFORE_FIRST_DATE |   WEEK     | DAILY             | TIMESCALE      |            63 |      28.580 |        2204.339
+| BEFORE_FIRST_DATE_MONTH   | BEFORE_FIRST_DATE |   MONTH    | DAILY             | LEGACY         |           279 |    4952.453 |          56.336
+| BEFORE_FIRST_DATE_MONTH   | BEFORE_FIRST_DATE |   MONTH    | DAILY             | TIMESCALE      |           279 |      19.033 |       14658.751
+| BEFORE_FIRST_DATE_YEAR    | BEFORE_FIRST_DATE |   YEAR     | DAILY             | LEGACY         |          3285 |    5028.000 |         653.341
+| BEFORE_FIRST_DATE_YEAR    | BEFORE_FIRST_DATE |   YEAR     | DAILY             | TIMESCALE      |          3285 |      71.498 |       45945.341
+| AFTER_LAST_DATE_DAY       | AFTER_LAST_DATE   |   DAY      | HOURLY            | LEGACY         |           216 |    8427.066 |          25.632
+| AFTER_LAST_DATE_DAY       | AFTER_LAST_DATE   |   DAY      | HOURLY            | TIMESCALE      |           216 |      33.005 |        6544.463
+| AFTER_LAST_DATE_WEEK      | AFTER_LAST_DATE   |   WEEK     | HOURLY            | LEGACY         |          1512 |    8232.224 |         183.668
+| AFTER_LAST_DATE_WEEK      | AFTER_LAST_DATE   |   WEEK     | HOURLY            | TIMESCALE      |          1512 |      59.630 |       25356.364
+| AFTER_LAST_DATE_MONTH     | AFTER_LAST_DATE   |   MONTH    | HOURLY            | LEGACY         |          6696 |    8443.237 |         793.061
+| AFTER_LAST_DATE_MONTH     | AFTER_LAST_DATE   |   MONTH    | HOURLY            | TIMESCALE      |          6696 |     145.218 |       46109.986
+| AFTER_LAST_DATE_YEAR      | AFTER_LAST_DATE   |   YEAR     | HOURLY            | LEGACY         |         78840 |    8688.681 |        9073.874
+| AFTER_LAST_DATE_YEAR      | AFTER_LAST_DATE   |   YEAR     | HOURLY            | TIMESCALE      |         78840 |    1020.274 |       77273.360
+| BEFORE_FIRST_DATE_DAY     | BEFORE_FIRST_DATE |   DAY      | HOURLY            | LEGACY         |           216 |    8076.936 |          26.743
+| BEFORE_FIRST_DATE_DAY     | BEFORE_FIRST_DATE |   DAY      | HOURLY            | TIMESCALE      |           216 |      67.495 |        3200.237
+| BEFORE_FIRST_DATE_WEEK    | BEFORE_FIRST_DATE |   WEEK     | HOURLY            | LEGACY         |          1512 |    8114.325 |         186.337
+| BEFORE_FIRST_DATE_WEEK    | BEFORE_FIRST_DATE |   WEEK     | HOURLY            | TIMESCALE      |          1512 |      62.265 |       24283.305
+| BEFORE_FIRST_DATE_MONTH   | BEFORE_FIRST_DATE |   MONTH    | HOURLY            | LEGACY         |          6696 |    8491.706 |         788.534
+| BEFORE_FIRST_DATE_MONTH   | BEFORE_FIRST_DATE |   MONTH    | HOURLY            | TIMESCALE      |          6696 |     137.100 |       48840.263
+| BEFORE_FIRST_DATE_YEAR    | BEFORE_FIRST_DATE |   YEAR     | HOURLY            | LEGACY         |         78840 |    8327.288 |        9467.668
+| BEFORE_FIRST_DATE_YEAR    | BEFORE_FIRST_DATE |   YEAR     | HOURLY            | TIMESCALE      |         78840 |    1140.075 |       69153.345
+
+![After Last Date Chart](./Images/after_refresh_meter_hourly.png) ![After Last Date Chart](./Images/after_refresh_meter_daily.png)
+![Before First Date Chart](./Images/before_refresh_meter_hourly.png) ![Before First Date Chart](./Images/before_refresh_meter_daily.png)
+
+The numbers before the labels on the graph has no value other than to align the graph better. The alignment would not be correct without the numbers prefixed. Example the spelling of Week is starts with "W" and the spelling of Month starts with "M", if ordered by letters, month will be displayed before week, therefore, the numbers appear before the duration.
+
+#### Mismatch:
+
+| aggregation_level | legacy_rows | timescale_rows | mismatch_rows | tolerance | passed
+|-------------------|-------------|----------------|---------------|-----------|--------
+| DAILY             |        6579 |           6579 |             0 |     1e-11 | t
+| HOURLY            |      157896 |         157896 |             0 |     1e-11 | t
+
+
+#### Fair Comparison
+At this point it is unfair to just compare the refresh data. Since TimeScaleDB uses significant time to insert data, and overall comparison seems fair.
+
+![After Last Date Chart](./Images/after_insert_refresh_meter_hourly.png) ![Before Last Date Chart](./Images/before_insert_refresh_meter_hourly.png)
+![After Last Date Chart](./Images/after_insert_refresh_meter_daily.png) ![Before Last Date Chart](./Images/before_insert_refresh_meter_daily.png)
+
+The numbers before the labels on the graph has no value other than to align the graph better. The alignment would not be correct without the numbers prefixed. Example the spelling of Week is starts with "W" and the spelling of Month starts with "M", if ordered by letters, month will be displayed before week, therefore, the numbers appear before the duration.
 
 The implementation is functionally complete and ready for continued development.
 
@@ -30,7 +190,7 @@ The implementation is functionally complete and ready for continued development.
 
 ## Existing Architecture
 
-Prior to this project, reporting was performed entirely using PostgreSQL materialized views.
+Prior to this project, reporting was performed entirely using PostgreSQL materialized views. Below the readings were a regular table and the rest were materialized views. Note this is based on work done in the timeVary branch so the development branch did not have the group views, dealing with conversions in views and some other changes.
 
 ```
 readings
@@ -61,13 +221,13 @@ Although functionally correct, the design had several limitations.
 
 ### Expensive Refreshes
 
-Materialized views refreshed by recomputing large portions of historical data.
+Materialized views refreshed by recomputing all of historical data.
 
 As the database grew, refresh times increased proportionally.
 
 ### Duplicate Work
 
-Hourly and daily materialized views independently repeated much of the same aggregation logic.
+Before the previous time-varying work, where this was originally addressed, hourly and daily materialized views independently repeated much of the same aggregation logic.
 
 ### Runtime Conversion Overhead
 
@@ -77,13 +237,9 @@ Every refresh repeatedly joined against conversion tables and recalculated overl
 
 Group aggregation depended on recursive views and runtime helper functions that are incompatible with TimescaleDB continuous aggregates.
 
----
-
 # 2. Project Objectives
 
 The migration was designed around four primary objectives.
-
-## Performance
 
 Replace expensive full refreshes with TimescaleDB's incremental aggregation model.
 
@@ -98,8 +254,6 @@ Support significantly larger datasets without proportional increases in refresh 
 ## Maintainability
 
 Move expensive calculations into predictable preprocessing and refresh stages rather than executing them repeatedly during aggregation.
-
----
 
 # 3. Final Architecture
 
@@ -129,8 +283,6 @@ The intended aggregation hierarchy is:
 4. Aggregate meter values into group values.
 
 This layered design minimizes repeated calculations and enables TimescaleDB to perform incremental refreshes efficiently.
-
----
 
 # 4. Database Components
 
