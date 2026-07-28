@@ -122,7 +122,7 @@ The migration successfully preserves analytical correctness while reducing aggre
 
 ![After Last Date Chart](./Images/after_insert_meter_duration.png) ![Before First Date Chart](./Images/before_insert_meter_duration.png)
 
-The numbers before the labels on the graph has no value other than to align the graph better. The alignment would not be correct without the numbers prefixed. Example the spelling of Week is starts with "W" and the spelling of Month starts with "M", if ordered by letters, month will be displayed before week, therefore, the numbers appear before the duration.
+The numbers before the labels on the graph has no value other than to align the graph better. The alignment would not be correct without the numbers prefixed. Example the spelling of Week starts with "W" and the spelling of Month starts with "M", if ordered by letters, month will be displayed before week, therefore, the numbers appear before the duration.
 
 #### Refresh:
 
@@ -164,7 +164,7 @@ The numbers before the labels on the graph has no value other than to align the 
 ![After Last Date Chart](./Images/after_refresh_meter_hourly.png) ![After Last Date Chart](./Images/after_refresh_meter_daily.png)
 ![Before First Date Chart](./Images/before_refresh_meter_hourly.png) ![Before First Date Chart](./Images/before_refresh_meter_daily.png)
 
-The numbers before the labels on the graph has no value other than to align the graph better. The alignment would not be correct without the numbers prefixed. Example the spelling of Week is starts with "W" and the spelling of Month starts with "M", if ordered by letters, month will be displayed before week, therefore, the numbers appear before the duration.
+The numbers before the labels on the graph has no value other than to align the graph better. The alignment would not be correct without the numbers prefixed. Example the spelling of Week starts with "W" and the spelling of Month starts with "M", if ordered by letters, month will be displayed before week, therefore, the numbers appear before the duration.
 
 #### Mismatch:
 
@@ -180,7 +180,7 @@ At this point it is unfair to just compare the refresh data. Since TimeScaleDB u
 ![After Last Date Chart](./Images/after_insert_refresh_meter_hourly.png) ![Before Last Date Chart](./Images/before_insert_refresh_meter_hourly.png)
 ![After Last Date Chart](./Images/after_insert_refresh_meter_daily.png) ![Before Last Date Chart](./Images/before_insert_refresh_meter_daily.png)
 
-The numbers before the labels on the graph has no value other than to align the graph better. The alignment would not be correct without the numbers prefixed. Example the spelling of Week is starts with "W" and the spelling of Month starts with "M", if ordered by letters, month will be displayed before week, therefore, the numbers appear before the duration.
+The numbers before the labels on the graph has no value other than to align the graph better. The alignment would not be correct without the numbers prefixed. Example the spelling of Week starts with "W" and the spelling of Month starts with "M", if ordered by letters, month will be displayed before week, therefore, the numbers appear before the duration.
 
 The implementation is functionally complete and ready for continued development.
 
