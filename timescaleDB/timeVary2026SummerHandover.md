@@ -241,6 +241,8 @@ Group aggregation depended on recursive views and runtime helper functions that 
 
 The migration was designed around four primary objectives.
 
+## Performance
+
 Replace expensive full refreshes with TimescaleDB's incremental aggregation model.
 
 ## Correctness
