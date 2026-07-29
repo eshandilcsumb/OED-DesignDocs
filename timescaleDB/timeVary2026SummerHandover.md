@@ -312,6 +312,9 @@ Previously this information was calculated every time aggregation occurred.
 
 The new implementation performs the calculation once during ingestion and stores the results for reuse.
 
+The hypertable includes sec_in_rate and unit_represents columns. Since this code was based on the work of previous cohorts, these columns have been kept in place. If these two columns are not used in future, they must be removed from create statement and the trigger function must be adjusted accordingly.
+
+
 ### Benefits
 
 - Eliminates repeated hourly splitting.
@@ -351,8 +354,6 @@ Responsibilities include:
 
 Because the hourly split hypertable already contains precomputed overlap information, expensive calculations are not repeated.
 
----
-
 ## 4.3 Meter Daily Continuous Aggregate
 
 File:
@@ -377,9 +378,9 @@ rather than from the hourly continuous aggregate.
 
 While this maintains correctness, it does not yet realize the full benefits of hierarchical aggregation.
 
-A future implementation should expose rollup state from the hourly aggregate (weighted sums, durations, minimums, and maximums) so that daily aggregates can be computed by summing intermediate states rather than reprocessing raw hourly slices.
+A future implementation should expose rollup state from the hourly aggregate (weighted sums, durations, minimums, and maximums) so that daily aggregates can be computed by summing intermediate states rather than reprocessing raw hourly slices. Since the daily meter values are used by daily group view and the buckets are hourly, the bucket could be lost and TimeScaleDB need the underlying hourly bucket on the hypertable to track changes, tehrefore this design was chosen.
 
-Care must be taken not to average hourly averages, as this would produce incorrect weighted results.
+Care must be taken not to average hourly averages, as this would produce incorrect weighted results. There was an instance where not having a better understanding of how daily rates were calculated for KWh, incorrect result was discovered during materialized view and TimeScaleDB. This may nhot be a problem, but if you find the values are different, this is a good starting point.
 
 ---
 
@@ -428,8 +429,6 @@ Implemented components include:
 
 This removes runtime recursion while remaining compatible with TimescaleDB.
 
----
-
 # 5. Application Integration
 
 The application initialization workflow was updated to create and maintain the new TimescaleDB objects.
@@ -467,7 +466,7 @@ Group queries now use:
 
 The implemented refresh order is:
 
-1. Rebuild hypertable_hourly_split (when required).
+1. Rebuild hypertable_hourly_split (when required, changes to cik and cik_vary data).
 2. Refresh hourly continuous aggregate.
 3. Refresh daily continuous aggregate.
 4. Refresh group dependency caches.
@@ -476,11 +475,9 @@ The implemented refresh order is:
 
 This dependency order must be preserved because each stage depends on results produced by previous stages.
 
----
-
 # 7. Testing and Validation
 
-A comprehensive validation suite was created to compare the TimescaleDB implementation against the legacy PostgreSQL implementation.
+A comprehensive validation suite was created to compare the TimescaleDB implementation against the last time-vary version that had already modified/added views and was moderately tested to verify it is correct.
 
 Comparison scripts were created for:
 
@@ -496,11 +493,7 @@ Validation confirmed:
 | Hourly | 157,896 | 157,896 | 0 |
 | Daily | 6,579 | 6,579 | 0 |
 
-Comparison tolerance:
-
-```
-1 × 10^-11
-```
+Comparison tolerance: 10e-11
 
 The following values were validated:
 
@@ -512,58 +505,297 @@ The following values were validated:
 
 No analytical differences were detected.
 
----
+```
+/*
+ * 1. Compare reading_rate values.
+ *
+ * This compares the primary hourly aggregation result between:
+ *
+ *   Original:
+ *       meter_hourly_readings_unit
+ *
+ *   TimescaleDB:
+ *       meter_hourly_readings_unit_cagg
+ *
+ * Any non-zero differences should be investigated.
+ */
+SELECT
+    mv.meter_id,
+    LOWER(mv.time_interval) AS mv_time,
+    mv.reading_rate AS mv_reading_rate,
+    cagg.bucket AS cagg_time,
+    cagg.reading_rate AS cagg_reading_rate,
+    (COALESCE(mv.reading_rate, 0) - COALESCE(cagg.reading_rate)) AS difference
+FROM meter_hourly_readings_unit AS mv INNER JOIN 
+	 meter_hourly_readings_unit_cagg AS cagg
+    	 ON mv.meter_id = cagg.meter_id
+    		 AND lower(mv.time_interval) = cagg.bucket
+    		 AND mv.graphic_unit_id = cagg.graphic_unit_id
+ORDER BY
+    ABS(COALESCE(mv.reading_rate) - COALESCE(cagg.reading_rate)) DESC
+LIMIT 20;
+
+
+/*
+ * 2. Compare max_rate and min_rate values.
+ *
+ * This verifies that the continuous aggregate preserves the same minimum and
+ * maximum hourly rates as the original materialized view.
+ *
+ * Any non-zero differences should be investigated.
+ */
+SELECT
+    mv.meter_id,
+    LOWER(mv.time_interval) AS mv_time,
+    mv.max_rate AS mv_max_rate,
+    cagg.max_rate AS cagg_max_rate,
+    (COALESCE(mv.max_rate) - COALESCE(cagg.max_rate)) AS max_difference,
+    mv.min_rate AS mv_min_rate,
+    cagg.min_rate AS cagg_min_rate,
+    (COALESCE(mv.min_rate) - COALESCE(cagg.min_rate)) AS min_difference
+FROM meter_hourly_readings_unit AS mv INNER JOIN 
+	 meter_hourly_readings_unit_cagg AS cagg
+    	 ON mv.meter_id = cagg.meter_id
+    		 AND lower(mv.time_interval) = cagg.bucket
+    		 AND mv.graphic_unit_id = cagg.graphic_unit_id
+ORDER BY
+    GREATEST(
+        ABS(COALESCE(mv.max_rate, 0) - COALESCE(cagg.max_rate, 0)),
+        ABS(COALESCE(mv.min_rate, 0) - COALESCE(cagg.min_rate, 0))
+    ) DESC
+LIMIT 20;
+
+/*
+ * 3. Compare reading_rate values.
+ *
+ * This compares the primary hourly aggregation result between:
+ *
+ *   Original:
+ *       meter_daily_readings_unit
+ *
+ *   TimescaleDB:
+ *       meter_daily_readings_unit_cagg
+ *
+ * Any non-zero differences should be investigated.
+ */
+SELECT
+    mv.meter_id,
+    LOWER(mv.time_interval) AS mv_time,
+    mv.reading_rate AS mv_reading_rate,
+    LOWER(cagg.time_interval) AS cagg_time,
+    cagg.reading_rate AS cagg_reading_rate,
+    (COALESCE(mv.reading_rate, 0) - COALESCE(cagg.reading_rate, 0)) AS difference
+FROM meter_daily_readings_unit AS mv LEFT JOIN 
+	 meter_daily_readings_unit_cagg AS cagg
+     	 ON mv.meter_id = cagg.meter_id
+    		 AND mv.time_interval = cagg.time_interval
+    		 AND mv.graphic_unit_id = cagg.graphic_unit_id
+ORDER BY
+    ABS(COALESCE(mv.reading_rate, 0) - COALESCE(cagg.reading_rate, 0)) DESC
+LIMIT 20;
+
+
+/*
+ * 4. Compare max_rate and min_rate values.
+ *
+ * This verifies that the continuous aggregate preserves the same minimum and
+ * maximum hourly rates as the original materialized view.
+ *
+ * Any non-zero differences should be investigated.
+ */
+SELECT
+    mv.meter_id,
+    LOWER(mv.time_interval) AS mv_time_start,
+	LOWER(cagg.time_interval) AS cagg_time_start,
+	UPPER(mv.time_interval) AS mv_time_end,
+	UPPER(cagg.time_interval) AS cagg_time_end,
+    mv.max_rate AS mv_max_rate,
+    cagg.max_rate AS cagg_max_rate,
+    (COALESCE(mv.max_rate, 0) - COALESCE(cagg.max_rate, 0)) AS max_difference,
+    mv.min_rate AS mv_min_rate,
+	cagg.min_rate AS cagg_min_rate,
+	(COALESCE(mv.min_rate, 0) - COALESCE(cagg.min_rate, 0)) AS min_difference
+FROM meter_daily_readings_unit AS mv LEFT JOIN 
+	 meter_daily_readings_unit_cagg AS cagg
+    	 ON mv.meter_id = cagg.meter_id
+    	 	 AND mv.time_interval = cagg.time_interval
+    	 	 AND mv.graphic_unit_id = cagg.graphic_unit_id
+ORDER BY
+    GREATEST(
+        ABS(COALESCE(mv.max_rate, 0) - COALESCE(cagg.max_rate, 0)),
+        ABS(COALESCE(mv.min_rate, 0) - COALESCE(cagg.min_rate, 0))
+    ) DESC
+LIMIT 20;
+
+/*
+ * 5. Compare reading_rate values.
+ *
+ * This compares the primary hourly aggregation result between:
+ *
+ *   Original:
+ *       group_hourly_readings_unit
+ *
+ *   TimescaleDB:
+ *       group_hourly_readings_unit_cagg
+ *
+ * Any non-zero differences should be investigated.
+ */
+SELECT
+    mv.group_id,
+    LOWER(mv.time_interval) AS mv_time,
+    mv.reading_rate AS mv_reading_rate,
+    LOWER(cagg.time_interval) AS cagg_time,
+    cagg.reading_rate AS cagg_reading_rate,
+    (
+        COALESCE(mv.reading_rate, 0)
+        -
+        COALESCE(cagg.reading_rate, 0)
+    ) AS difference
+FROM group_hourly_readings_unit AS mv INNER JOIN 
+     group_hourly_readings_unit_cagg AS cagg
+         ON mv.group_id = cagg.group_id
+             AND mv.time_interval = cagg.time_interval
+             AND mv.graphic_unit_id = cagg.graphic_unit_id
+ORDER BY
+    ABS(
+        COALESCE(mv.reading_rate, 0)
+        -
+        COALESCE(cagg.reading_rate, 0)
+    ) DESC
+LIMIT 20;
+
+/*
+ * 6. Identify rows missing from the TimescaleDB continuous aggregate.
+ *
+ * This catches cases where the continuous aggregate does not contain a
+ * corresponding group/hour/unit combination.
+ */
+SELECT
+    mv.group_id,
+    mv.time_interval,
+    mv.graphic_unit_id,
+    mv.reading_rate
+FROM group_hourly_readings_unit AS mv LEFT JOIN 
+     group_hourly_readings_unit_cagg AS cagg 
+         ON mv.group_id = cagg.group_id 
+             AND mv.time_interval = cagg.time_interval 
+             AND mv.graphic_unit_id = cagg.graphic_unit_id
+WHERE cagg.group_id IS NULL
+ORDER BY mv.group_id, mv.time_interval
+LIMIT 20;
+
+/*
+ * 1. Compare reading_rate values.
+ *
+ * This compares the primary daily aggregation result between:
+ *
+ *   Original:
+ *       group_daily_readings_unit
+ *
+ *   TimescaleDB:
+ *       group_daily_readings_unit_cagg
+ *
+ * Any non-zero differences should be investigated.
+ */
+SELECT
+    mv.group_id,
+    LOWER(mv.time_interval) AS mv_time,
+    LOWER(cagg.time_interval) AS cagg_time,
+    mv.reading_rate AS mv_reading_rate,
+    cagg.reading_rate AS cagg_reading_rate,
+    (
+        COALESCE(mv.reading_rate, 0)
+        -
+        COALESCE(cagg.reading_rate, 0)
+    ) AS difference
+FROM group_daily_readings_unit AS mv LEFT JOIN 
+     group_daily_readings_unit_cagg AS cagg
+         ON mv.group_id = cagg.group_id
+         AND mv.time_interval = cagg.time_interval
+         AND mv.graphic_unit_id = cagg.graphic_unit_id
+ORDER BY
+    ABS(
+        COALESCE(mv.reading_rate, 0)
+        -
+        COALESCE(cagg.reading_rate, 0)
+    ) DESC
+LIMIT 20;
+
+/*
+ * 2. Compare row counts.
+ *
+ * This identifies missing or additional daily buckets between the two
+ * implementations.
+ */
+SELECT
+    COUNT(*) AS total_rows,
+    COUNT(cagg.group_id) AS matching_cagg_rows,
+    COUNT(*) - COUNT(cagg.group_id) AS missing_cagg_rows
+FROM group_daily_readings_unit AS mv LEFT JOIN 
+     group_daily_readings_unit_cagg AS cagg
+         ON mv.group_id = cagg.group_id
+             AND mv.time_interval = cagg.time_interval
+             AND mv.graphic_unit_id = cagg.graphic_unit_id;
+
+/*
+ * 3. Display missing TimescaleDB rows.
+ *
+ * These rows exist in the original materialized view but not in the
+ * continuous aggregate.
+ */
+SELECT
+    mv.group_id,
+    LOWER(mv.time_interval) AS mv_time,
+    UPPER(mv.time_interval) AS mv_time_end,
+    mv.graphic_unit_id,
+    mv.reading_rate
+FROM group_daily_readings_unit AS mv LEFT JOIN 
+     group_daily_readings_unit_cagg AS cagg
+         ON mv.group_id = cagg.group_id
+             AND mv.time_interval = cagg.time_interval
+             AND mv.graphic_unit_id = cagg.graphic_unit_id
+WHERE cagg.group_id IS NULL
+ORDER BY
+    mv.group_id,
+    mv.time_interval
+LIMIT 20;
+```
 
 # 8. Benchmark Results
 
 ## Hourly Refresh
 
-Legacy:
+Legacy: ~8.4 seconds
 
-```
-~8.4 seconds
-```
+TimescaleDB: ~33 milliseconds
 
-TimescaleDB:
-
-```
-~33 milliseconds
-```
-
-Approximately **250× faster**.
-
----
+Approximately **250× faster**. Review benchmark details above for details.
 
 ## Daily Refresh
 
-Legacy:
+Legacy: ~5.1 seconds
 
-```
-~5.1 seconds
-```
+TimescaleDB: ~15 milliseconds
 
-TimescaleDB:
-
-```
-~15 milliseconds
-```
-
-Approximately **340× faster**.
-
----
+Approximately **340× faster**. Review benchmark details above for details.
 
 # 9. Storage Considerations
 
-| Object | Size |
-|---------|------|
-| readings | 33 MB |
-| hypertable_hourly_split | 1.3 GB |
-| hourly continuous aggregate | 218 MB |
-| daily continuous aggregate | 12 MB |
+|object_name						  | object_type             | size_bytes | size_pretty
+|----------------------------------------------------------|-------------------------|------------|-------------
+| hypertable_hourly_split                                  | HOURLY_SPLIT_HYPERTABLE | 1360068608 | 1297 MB
+| public.hypertable_hourly_split chunks                    | TIMESCALE_CHUNKS        | 1360052224 | 1297 MB
+| meter_hourly_readings_unit_cagg                          | TIMESCALE_HOURLY_CAGG   |  229097472 | 218 MB
+| _timescaledb_internal._materialized_hypertable_12 chunks | TIMESCALE_CHUNKS        |  229056512 | 218 MB
+| meter_hourly_readings_unit                               | LEGACY_HOURLY_MV        |  140754944 | 134 MB
+| readings                                                 | SOURCE_TABLE            |   34250752 | 33 MB
+| meter_daily_readings_unit_cagg                           | TIMESCALE_DAILY_CAGG    |   13082624 | 12 MB
+| _timescaledb_internal._materialized_hypertable_13 chunks | TIMESCALE_CHUNKS        |   13041664 | 12 MB
+| meter_daily_readings_unit                                | LEGACY_DAILY_MV         |    5611520 | 5480 kB
 
 The storage increase is primarily due to the hourly split hypertable.
 
-This is expected because each reading is decomposed into hourly slices before aggregation.
+This is expected because each reading is decomposed into hourly slices before aggregation. Since some of the meter readings are in minutes, hourly buckets are expected to be lesser, therefore, requiring lesser storage. But the meta data, and other checks - such as change in bucket and tracking dirty bits per bucket - the storage size increases.
 
 The additional storage represents an intentional trade-off that enables:
 
@@ -577,16 +809,23 @@ The additional storage represents an intentional trade-off that enables:
 
 ## SQL
 
-- create_prerequisites.sql
-- create_group_dependencies.sql
-- create_hourly_readings.sql
-- create_daily_readings.sql
-- create_group_hourly_readings.sql
-- create_group_daily_readings.sql
-- CompareHourlyReadings.sql
-- CompareDailyReadings.sql
-- CompareGroupHourlyReadings.sql
-- CompareGroupDailyReadings.sql
+- [create_prerequisites.sql](./sqlScripts/implementation/create_prerequisites.sql)
+- [create_group_dependencies.sql](./sqlScripts/implementation/create_group_dependencies.sql)
+- [create_hourly_readings.sql](./sqlScripts/implementation/create_hourly_readings.sql)
+- [create_daily_readings.sql](./sqlScripts/implementation/create_daily_readings.sql)
+- [create_group_hourly_readings.sql](./sqlScripts/implementation/create_group_hourly_readings.sql)
+- [create_group_daily_readings.sql](./sqlScripts/implementation/create_group_daily_readings.sql)
+- [update_function_get_3d_readings.sql](./sqlScripts/implementation/update_function_get_3d_readings.sql)
+- [update_function_get_compare_readings.sql](./sqlScripts/implementation/update_function_get_compare_readings.sql)
+- [update_group_line_readings_unit.sql](./sqlScripts/implementation/update_group_line_readings_unit.sql)
+- [update_meter_group_bar.sql](./sqlScripts/implementation/update_meter_group_bar.sql)
+- [update_meter_line_readings_unit.sql](./sqlScripts/implementation/update_meter_line_readings_unit.sql)
+- [update_function_gupdate_reading_viewset_3d_readings.sql](./sqlScripts/implementation/update_reading_views.sql)
+- [drop_legacy_reading_views.sql](./sqlScripts/implementation/drop_legacy_reading_views.sql)
+- [CompareHourlyReadings.sql](./sqlScripts/compare/CompareHourlyReadings.sql)
+- [CompareDailyReadings.sql](./sqlScripts/compare/CompareDailyReadings.sql)
+- [CompareGroupHourlyReadings.sql](./sqlScripts/compare/CompareGroupHourlyReadings.sql)
+- [CompareGroupDailyReadings.sql](./sqlScripts/compare/CompareGroupDailyReadings.sql)
 
 ## Application
 
@@ -601,8 +840,6 @@ Responsible for:
 - rebuild workflow
 - integration with database setup
 
----
-
 # 11. Known Limitations
 
 The migration is complete but several areas remain for future optimization.
@@ -616,8 +853,6 @@ Group cache tables are refreshed during every refresh cycle regardless of whethe
 No explicit chunk interval has been configured.
 
 Historical data compression has not yet been evaluated.
-
----
 
 # 12. Future Work and Optimization Opportunities
 
@@ -638,8 +873,6 @@ Future work should investigate:
 
 These approaches would significantly reduce ingestion overhead.
 
----
-
 ## 12.2 Avoid Full Hypertable Rebuilds
 
 The refresh workflow currently rebuilds the entire split hypertable whenever no refresh window is supplied.
@@ -657,9 +890,7 @@ Full rebuilds should therefore be reserved for:
 - conversion changes
 - meter-unit changes
 
-Ordinary refreshes should instead use bounded refresh windows or TimescaleDB refresh policies.
-
----
+Ordinary refreshes should instead use bounded refresh windows or TimescaleDB refresh policies. I initially thought that making unbounded refreshes was inexpensive, but after carefully reviewing the TimeScaleDB document, as the buckets count increases, the surface area of checks increases. This is an opportunity that could be further investigated. For more details, links to useful resources are in the "Recommended References and Further Reading" section below.
 
 ## 12.3 Build Daily Aggregates from Hourly Aggregates
 
@@ -672,9 +903,7 @@ A true hierarchical implementation would expose rollup state from the hourly agg
 - minimum values
 - maximum values
 
-Daily aggregation could then process significantly fewer rows while maintaining correctness.
-
----
+Daily aggregation could then process significantly fewer rows while maintaining correctness. For more information see section 4.3 above, under hypertable_hourly_split.
 
 ## 12.4 Improve Time Predicate Efficiency
 
@@ -689,13 +918,11 @@ Some queries also call `time_bucket()` on values that are already bucketed.
 
 Removing this unnecessary computation should improve query performance.
 
----
-
 ## 12.5 Refresh Group Dependency Caches Only When Required
 
 Group cache tables are refreshed during every aggregate refresh.
 
-Normal reading imports do not modify:
+Normal reading imports do not modify (this needs verification and further research):
 
 - group membership
 - conversion compatibility
@@ -715,8 +942,6 @@ Additional indexes such as:
 
 should also be benchmarked.
 
----
-
 ## 12.6 Optimize Conversion Lookups
 
 The ingestion trigger repeatedly searches the conversion table using overlapping time ranges.
@@ -731,8 +956,6 @@ Future benchmarking should evaluate:
 
 to improve ingestion performance.
 
----
-
 ## 12.7 Tune Chunk Size and Historical Storage
 
 The split hypertable currently uses TimescaleDB's default chunk interval.
@@ -744,8 +967,6 @@ Future work should determine an optimal chunk size based on:
 - workload characteristics
 
 Historical chunks may also benefit from TimescaleDB columnstore compression once frequent rebuilds are eliminated.
-
----
 
 ## 12.8 Additional Benchmarking
 
@@ -761,8 +982,6 @@ These include:
 - higher-frequency readings
 - additional meters
 - production-scale workloads
-
----
 
 # 13. Lessons Learned
 
@@ -783,14 +1002,14 @@ Required metadata should be materialized before aggregation.
 Building:
 
 ```
-Raw
+hypertable_hourly_split
    │
 Hourly
    │
 Daily
 ```
 
-is substantially more efficient than repeatedly aggregating directly from raw data.
+is substantially more efficient than repeatedly aggregating directly from raw data since some expensive calculations are done when the meter reading data is inserted in the readings table.
 
 ---
 
@@ -800,17 +1019,13 @@ Performance improvements are only valuable if analytical correctness is preserve
 
 Every aggregate created during this project was validated against the legacy implementation before benchmarking.
 
----
-
 # 14. Acknowledgements
 
-Martin contributed the initial work integrating the group views and provided an important foundation for the final group aggregation implementation.
+@MartinCSUMB contributed the initial work integrating the group views and provided an important foundation for the final group aggregation implementation.
 
-Dr. Huss-Lederman provided valuable guidance throughout testing, validation, benchmarking, and verification of the implementation.
+@huss provided valuable guidance throughout testing, validation, benchmarking, and verification of the implementation.
 
-Their support helped ensure both analytical correctness and significant performance improvements.
-
----
+Their support along with all the previous contributors to OED helped ensure both analytical correctness and significant performance improvements.
 
 # 15. Current Status
 
@@ -836,8 +1051,6 @@ Future contributors should use this document as the primary technical reference 
 
 The following TimescaleDB documentation references provide additional background and guidance for future contributors working on optimization, maintenance, and further development of the aggregation architecture.
 
----
-
 ## Data Ingestion Optimization
 
 TimescaleDB recommends using multi-row inserts or bulk loading methods such as COPY instead of inserting rows individually. Batch ingestion reduces transaction overhead and improves write performance, particularly for high-volume time-series workloads.
@@ -849,8 +1062,6 @@ https://www.tigerdata.com/docs/build/data-management/write-data/insert
 Caption:
 
 TimescaleDB documentation describing recommended approaches for efficient data ingestion, including multi-row INSERT operations and COPY-based loading.
-
----
 
 ## Continuous Aggregate Refresh Policies
 
@@ -866,8 +1077,6 @@ Caption:
 
 TimescaleDB documentation explaining continuous aggregate refresh policies and recommended approaches for managing incremental materialization.
 
----
-
 ## Hypertable Query Performance and Chunk Pruning
 
 Efficient time filtering is important for TimescaleDB hypertables because queries should allow TimescaleDB to exclude unnecessary chunks.
@@ -881,8 +1090,6 @@ https://www.tigerdata.com/docs/build/performance-optimization/secondary-indexes
 Caption:
 
 TimescaleDB documentation covering query performance optimization, indexing strategies, and efficient access patterns for hypertables.
-
----
 
 ## Hierarchical Continuous Aggregates
 
@@ -898,8 +1105,6 @@ Caption:
 
 TimescaleDB documentation describing hierarchical continuous aggregates and techniques for building multi-level aggregation pipelines.
 
----
-
 ## Continuous Aggregate Limitations with Joined Tables
 
 Group aggregation relies on cached dependency tables because continuous aggregates have limitations when tracking changes in joined tables.
@@ -914,8 +1119,6 @@ Caption:
 
 TimescaleDB documentation explaining continuous aggregate behaviour, limitations, and considerations when using joins.
 
----
-
 ## Hypertable Chunk Sizing
 
 The current implementation relies on TimescaleDB default chunk sizing.
@@ -929,8 +1132,6 @@ https://www.tigerdata.com/docs/learn/hypertables/understand-hypertables
 Caption:
 
 TimescaleDB documentation explaining hypertables, chunk sizing, and storage management considerations.
-
----
 
 ## Continuous Aggregate Indexing
 
